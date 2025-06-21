@@ -7,13 +7,15 @@ Date: 12/24/2022
 """
 
 # std imports
-from os import getenv
+from os import getenv, path
 from socket import socket, AF_INET, SOCK_DGRAM, SOCK_STREAM
 from typing import Any, Callable
 from subprocess import call, DEVNULL
 from time import sleep
 from platform import system
 from functools import partial
+from json import load, dumps
+from threading import Lock
 # 3rd party imports
 from dotenv import load_dotenv
 from discord_webhook import DiscordWebhook
@@ -40,16 +42,31 @@ class PingStatus:
     Using an object to store this means it updates globally.
     """
     def __init__(self) -> None:
-        # whether to run any checks at all
-        self.ping_server = True
-        # whether to check the Rubidium server or not
-        self.ping_rub = True
-        # whether to check the Dubnium server or not
-        self.ping_dub = True
-        # whether to check the Osmium server or not
-        self.ping_os = False
-        # whether to check SSH or not
-        self.ping_ssh = False
+        self.ping_status_locker = Lock()
+        # read config file if it exists
+        if path.exists("/home/hibobjr/monitor/checks.json"):
+            with open("/home/hibobjr/monitor/checks.json", 'r', encoding='utf8') as checks:
+                self.ping_servers = load(checks)
+        else:
+            self.ping_servers = {"ping_server": True, "ping_rub": True, "ping_dub": False, "ping_os": False, "ping_ssh": False}
+            with open("/home/hibobjr/monitor/checks.json", 'w', encoding='utf8') as checks:
+                checks.write(dumps(self.ping_servers))
+
+    def toggle_ping_server(self) -> None:
+        """
+        Toggles whether the bot does any checks at all
+
+        :return: None
+        """
+        with self.ping_status_locker:
+            # toggle the status
+            if self.ping_servers["ping_server"]:
+                self.ping_servers["ping_server"] = False
+            else:
+                self.ping_servers["ping_server"] = True
+            # write to file to persist
+            with open("/home/hibobjr/monitor/checks.json", 'w', encoding='utf8') as checks:
+                checks.write(dumps(self.ping_servers))
 
     def toggle_ping_rub(self) -> None:
         """
@@ -57,10 +74,15 @@ class PingStatus:
 
         :return: None
         """
-        if self.ping_rub:
-            self.ping_rub = False
-        else:
-            self.ping_rub = True
+        with self.ping_status_locker:
+            # toggle the status
+            if self.ping_servers["ping_rub"]:
+                self.ping_servers["ping_rub"] = False
+            else:
+                self.ping_servers["ping_rub"] = True
+            # write to file to persist
+            with open("/home/hibobjr/monitor/checks.json", 'w', encoding='utf8') as checks:
+                checks.write(dumps(self.ping_servers))
 
     def toggle_ping_dub(self) -> None:
         """
@@ -68,10 +90,15 @@ class PingStatus:
 
         :return: None
         """
-        if self.ping_dub:
-            self.ping_dub = False
-        else:
-            self.ping_dub = True
+        with self.ping_status_locker:
+            # toggle the status
+            if self.ping_servers["ping_dub"]:
+                self.ping_servers["ping_dub"] = False
+            else:
+                self.ping_servers["ping_dub"] = True
+            # write to file to persist
+            with open("/home/hibobjr/monitor/checks.json", 'w', encoding='utf8') as checks:
+                checks.write(dumps(self.ping_servers))
 
     def toggle_ping_os(self) -> None:
         """
@@ -79,10 +106,15 @@ class PingStatus:
 
         :return: None
         """
-        if self.ping_os:
-            self.ping_os = False
-        else:
-            self.ping_os = True
+        with self.ping_status_locker:
+            # toggle the status
+            if self.ping_servers["ping_os"]:
+                self.ping_servers["ping_os"] = False
+            else:
+                self.ping_servers["ping_os"] = True
+            # write to file to persist
+            with open("/home/hibobjr/monitor/checks.json", 'w', encoding='utf8') as checks:
+                checks.write(dumps(self.ping_servers))
 
     def toggle_ping_ssh(self) -> None:
         """
@@ -90,10 +122,15 @@ class PingStatus:
 
         :return: None
         """
-        if self.ping_ssh:
-            self.ping_ssh = False
-        else:
-            self.ping_ssh = True
+        with self.ping_status_locker:
+            # toggle the status
+            if self.ping_servers["ping_ssh"]:
+                self.ping_servers["ping_ssh"] = False
+            else:
+                self.ping_servers["ping_ssh"] = True
+            # write to file to persist
+            with open("/home/hibobjr/monitor/checks.json", 'w', encoding='utf8') as checks:
+                checks.write(dumps(self.ping_servers))
 
 
 def get_channels() -> list[TextChannel]:
@@ -192,26 +229,26 @@ def start_monitoring() -> None:
 
     :return: None
     """
-    while status.ping_server:
+    while status.ping_servers["ping_server"]:
         if ping_server():
             result = f""
-            if status.ping_rub:
+            if status.ping_servers["ping_rub"]:
                 if not tcp_connect(25565):
                     result += f"Rubidium ({host}:25565) is down!\n"
-            if status.ping_dub:
+            if status.ping_servers["ping_dub"]:
                 if not tcp_connect(25566):
                     result += f"Dubnium ({host}:25566) is down!\n"
-            if status.ping_os:
+            if status.ping_servers["ping_os"]:
                 if not ping_osmium():
                     result += f"Osmium ({host}:27015) is down!\n"
-            if status.ping_ssh:
+            if status.ping_servers["ping_ssh"]:
                 if not tcp_connect(22):
                     result += f"SSH ({host}:22) is down!\n"
 
             if result != f"":
                 DiscordWebhook(url=webhook, content=result).execute()
         else:
-            DiscordWebhook(url=webhook, content=f"{host} (router) is down!").execute()
+            DiscordWebhook(url=webhook, content=f"{host} is down!").execute()
         sleep(60)
 
 
@@ -233,47 +270,10 @@ async def run_blocking(blocking_func: Callable, *args, **kwargs) -> Any:
     return await botClient.loop.run_in_executor(None, func)
 
 
-@tree.command(name='start', 
-              description='Begins checking server connectivity', 
-              guild=Object(id=guild_id))
-async def start(ctx: Interaction) -> None:
-    """
-    A bot command that starts server checks if they aren't running
-
-    :param ctx: The context which the command was sent (which channel, when, etc.)
-
-    :return: None
-    """
-    await ctx.response.send_message("Beginning server checks...")
-    if not status.ping_server:
-        status.ping_server = True
-        await run_blocking(start_monitoring)
-    else:
-        await ctx.response.send_message("Server checks were already running")
-
-
-@tree.command(name='stop', 
-              description='Ends checking server connectivity', 
-              guild=Object(id=guild_id))
-async def stop(ctx: Interaction) -> None:
-    """
-    A bot command that stops server checks if they aren't stopped
-
-    :param ctx: The context which the command was sent (which channel, when, etc.)
-
-    :return: None
-    """
-    if status.ping_server:
-        await ctx.response.send_message("Stopping server checks...")
-        status.ping_server = False
-    else:
-        await ctx.response.send_message("Server checks were already stopped")
-
-
 @tree.command(name='toggle', 
               description='Enabled or disables checking a server from [rubidium, dubnium, osmium, ssh]', 
               guild=Object(id=guild_id))
-async def disable_ping(ctx: Interaction, check_to_stop: str) -> None:
+async def disable_ping(ctx: Interaction, server_to_check: str) -> None:
     """
     A bot command that toggles on or off specific server pings to prevent spam when a server is purposely offline
 
@@ -283,21 +283,27 @@ async def disable_ping(ctx: Interaction, check_to_stop: str) -> None:
 
     :return: None
     """
-    match check_to_stop.lower():
+    match server_to_check.lower():
+        case "all":
+            if status.ping_servers["ping_server"]:
+                await ctx.response.send_message("Stopping server checks...")
+            else:
+                await ctx.response.send_message("Beginning server checks...")
+            status.toggle_ping_server()
         case "rubidium":
             status.toggle_ping_rub()
-            await ctx.response.send_message("Checking Rubidium connectivity: " + str(status.ping_rub))
+            await ctx.response.send_message("Checking Rubidium connectivity: " + str(status.ping_servers["ping_rub"]))
         case "dubnium":
             status.toggle_ping_dub()
-            await ctx.response.send_message("Checking Dubnium connectivity: " + str(status.ping_dub))
+            await ctx.response.send_message("Checking Dubnium connectivity: " + str(status.ping_servers["ping_dub"]))
         case "osmium":
             status.toggle_ping_os()
-            await ctx.response.send_message("Checking Osmium connectivity: " + str(status.ping_os))
+            await ctx.response.send_message("Checking Osmium connectivity: " + str(status.ping_servers["ping_os"]))
         case "ssh":
             status.toggle_ping_ssh()
-            await ctx.response.send_message("Checking SSH connectivity: " + str(status.ping_ssh))
+            await ctx.response.send_message("Checking SSH connectivity: " + str(status.ping_servers["ping_ssh"]))
         case _:
-            await ctx.response.send_message("Unknown parameter. Please use 'rubidium', 'dubnium', 'osmium', or 'ssh'")
+            await ctx.response.send_message("Unknown parameter. Please use 'all', 'rubidium', 'dubnium', 'osmium', or 'ssh'")
 
 
 @tree.command(name='status', 
@@ -313,11 +319,11 @@ async def get_status(ctx: Interaction) -> None:
     """
     send_block = f"```\n"
 
-    send_block += f"RUNNING CHECKS: {status.ping_server}\n"
-    send_block += f"RUBIDIUM CHECKS: {status.ping_rub}\n"
-    send_block += f"DUBNIUM CHECKS: {status.ping_dub}\n"
-    send_block += f"OSMIUM CHECKS: {status.ping_os}\n"
-    send_block += f"SSH CHECKS: {status.ping_ssh}\n"
+    send_block += f"RUNNING CHECKS: {status.ping_servers["ping_server"]}\n"
+    send_block += f"RUBIDIUM CHECKS: {status.ping_servers["ping_rub"]}\n"
+    send_block += f"DUBNIUM CHECKS: {status.ping_servers["ping_dub"]}\n"
+    send_block += f"OSMIUM CHECKS: {status.ping_servers["ping_os"]}\n"
+    send_block += f"SSH CHECKS: {status.ping_servers["ping_ssh"]}\n"
 
     send_block += f"```"
     await ctx.response.send_message(send_block)
